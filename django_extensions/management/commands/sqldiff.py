@@ -27,6 +27,12 @@ from optparse import make_option
 
 ORDERING_FIELD = IntegerField('_order', null=True)
 
+try:
+    from django.contrib.gis.db.models import fields as gis_model_fields
+    GIS_FIELDS = [field for field in dir(gis_model_fields) if field.endswith("Field")]
+except:
+    GIS_FIELDS = []
+
 def flatten(l, ltypes=(list, tuple)):
     ltype = type(l)
     l = list(l)
@@ -114,6 +120,14 @@ class SQLDiff(object):
             'field-parameter-differ': self.SQL_FIELD_PARAMETER_DIFFER,
         }
 
+        """
+        # check for django.contrib.gis
+        from django.contrib.gis.db.models import fields
+        for field in [field for app_model in app_models for field in app_model._meta.local_fields]:
+            if hasattr(fields, field.__class__.__name__):
+                self.add_difference('comment', 'Detected use of GeoDjango, please be carefull as support for GeoDjango is SQLDiff is limited!')
+        """
+
     def add_app_model_marker(self, app_label, model_name):
         self.differences.append((app_label, model_name, []))
         
@@ -148,6 +162,9 @@ class SQLDiff(object):
                 rowset.append(field)
             result.append(dict(rowset))
         return result
+
+    def get_indexes(self, app_model):
+        return self.introspection.get_indexes(self.cursor, app_model._meta.db_table)
 
     def get_field_model_type(self, field):
         return field.db_type()
@@ -240,6 +257,7 @@ class SQLDiff(object):
                 if att_opts['primary_key'] and field.primary_key: continue
                 if att_opts['unique'] and field.unique: continue
                 if att_opts['unique'] and att_name in flatten(meta.unique_together): continue
+                if getattr(field, 'spatial_index', False): continue
                 self.add_difference('index-missing-in-model', table_name, att_name)
 
     def find_field_missing_in_model(self, fieldmap, table_description, table_name):
@@ -287,7 +305,7 @@ class SQLDiff(object):
 
             if not model_type==db_type:
                 self.add_difference('field-parameter-differ', table_name, field.name, model_type, db_type)
-    
+
     @transaction.commit_manually
     def find_differences(self):
         cur_app_label = None
@@ -305,8 +323,8 @@ class SQLDiff(object):
                 # Table is missing from database
                 self.add_difference('table-missing-in-db', table_name)
                 continue
-            
-            table_indexes = self.introspection.get_indexes(self.cursor, table_name)
+
+            table_indexes = self.get_indexes(app_model)
             fieldmap = dict([(field.db_column or field.get_attname(), field) for field in meta.local_fields])
             
             # add ordering field if model uses order_with_respect_to
@@ -564,6 +582,8 @@ to check/debug ur models compared to the real database tables and columns."""
 
         if options.get('all_applications', False):
             app_models = models.get_models()
+            # remove any model that django.contrib.gis declares
+            app_models = [model for model in app_models if not model.__module__.startswith("django.contrib.gis.db")]
         else:
             if not app_labels:
                 raise CommandError('Enter at least one appname.')
