@@ -187,14 +187,22 @@ class SQLDiff(object):
 
         if reverse_type == "DecimalField":
             kwargs['max_digits'] = description[4]
-            kwargs['decimal_places'] = description[5]
+            kwargs['decimal_places'] = abs(description[5])
 
         if description[6]:
             kwargs['blank'] = True
             if not reverse_type in ('TextField', 'CharField'):
                 kwargs['null'] = True
-
-        field_db_type = getattr(models, reverse_type)(**kwargs).db_type()
+        
+        if '.' in reverse_type:
+            from django.utils import importlib
+            # TODO: when was importlib added to django.utils ? and do we
+            # need to add backwards compatibility code ?
+            module_path, package_name = reverse_type.rsplit('.', 1)
+            module = importlib.import_module(module_path)
+            field_db_type = getattr(module, package_name)(**kwargs).db_type()
+        else:
+            field_db_type = getattr(models, reverse_type)(**kwargs).db_type()
         return field_db_type
 
     def strip_parameters(self, field_type):
@@ -401,7 +409,7 @@ class MySQLDiff(SQLDiff):
         if not db_type:
             return
         if field:
-            if field.primary_key and db_type=='integer':
+            if field.primary_key and (db_type=='integer' or db_type=='bigint'):
                 db_type += ' AUTO_INCREMENT'
             # MySQL isn't really sure about char's and varchar's like sqlite
             field_type = self.get_field_model_type(field)
@@ -453,6 +461,9 @@ class PostgresqlSQLDiff(SQLDiff):
     DATA_TYPES_REVERSE_OVERRIDE = {
         20: 'IntegerField',
         1042: 'CharField',
+        # postgis types (TODO: support is very incomplete)
+        17506: 'django.contrib.gis.db.models.fields.PointField',
+        55902: 'django.contrib.gis.db.models.fields.MultiPolygonField',
     }
 
     # Hopefully in the future we can add constraint checking and other more
